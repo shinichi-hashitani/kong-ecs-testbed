@@ -22,6 +22,7 @@ locals {
   state_lock_table_name = "${var.project}-tflocks"
   oidc_role_name        = "${var.project}-github-actions"
   github_sub_pattern    = "repo:${var.github_owner}/${var.github_repo}:*"
+  terraform_policy_arn  = "arn:aws:iam::${local.account_id}:policy/${var.terraform_policy_name}"
 }
 
 ###############################################################################
@@ -112,14 +113,12 @@ resource "aws_iam_role" "github_actions" {
   description        = "Assumed by GitHub Actions in ${var.github_owner}/${var.github_repo} for terraform plan/apply and deck sync."
 }
 
-# Reuse the Customer Managed Policy created in 0-setup (terraform-execution-policy.json)
-data "aws_iam_policy" "terraform_execution" {
-  name = var.terraform_policy_name
-}
-
+# Reuse the Customer Managed Policy created in 0-setup (terraform-execution-policy.json).
+# Reference by constructed ARN to avoid iam:ListPolicies / iam:GetPolicy permission
+# requirements on the caller (only iam:AttachRolePolicy is needed).
 resource "aws_iam_role_policy_attachment" "terraform_execution" {
   role       = aws_iam_role.github_actions.name
-  policy_arn = data.aws_iam_policy.terraform_execution.arn
+  policy_arn = local.terraform_policy_arn
 }
 
 # Inline policy: S3 + DynamoDB access for the state backend

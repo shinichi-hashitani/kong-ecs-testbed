@@ -46,6 +46,8 @@
 
 ### Step 1. Bootstrap を apply（ローカル一回）
 
+> ⚠️ **このステップだけは AWS 管理者クレデンシャルで実行する**。bootstrap は OIDC Provider / S3 bucket / DynamoDB table を作るが、これらは 0-setup の `terraform` ユーザに付与している `kong-ecs-testbed-terraform` ポリシーに含まれない（管理者権限相当のため）。0-setup.md 1-2 で `aws iam create-policy` を実行した時のクレデンシャルをそのまま使う。詳細は [terraform/bootstrap/README.md](terraform/bootstrap/README.md)。
+
 #### 1-1. 変数を設定
 
 ```bash
@@ -54,11 +56,24 @@ cp terraform.tfvars.example terraform.tfvars
 # terraform.tfvars を編集して github_owner を自身の GitHub アカウント名に
 ```
 
-#### 1-2. 実行
+#### 1-2. admin クレデンシャルに切り替え
 
 ```bash
-set -a; source ../../.env; set +a   # AWS_PROFILE を読み込む
+# 別プロファイルとして登録している場合
+export AWS_PROFILE=kong-testbed-admin   # or 適切な admin profile 名
 
+# 環境変数で一時的に渡す場合
+# unset AWS_PROFILE
+# export AWS_ACCESS_KEY_ID="AKIA..."
+# export AWS_SECRET_ACCESS_KEY="..."
+# export AWS_REGION=ap-northeast-1
+
+aws sts get-caller-identity   # Arn が user/terraform でないことを確認
+```
+
+#### 1-3. 実行
+
+```bash
 terraform init
 terraform plan
 terraform apply
@@ -66,7 +81,20 @@ terraform apply
 
 > 💡 このモジュールは S3 / DynamoDB / OIDC / IAM Role を作る。state は意図的に **local** に置く（chicken-and-egg のため）。`terraform/bootstrap/terraform.tfstate` は gitignore 対象。
 
-#### 1-3. Output の控え
+#### 1-4. 通常クレデンシャルに戻す
+
+```bash
+# 別プロファイルだった場合
+export AWS_PROFILE=kong-testbed
+
+# 環境変数だった場合
+# unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+# export AWS_PROFILE=kong-testbed
+
+aws sts get-caller-identity   # Arn が user/terraform に戻る
+```
+
+#### 1-5. Output の控え
 
 ```bash
 terraform output
@@ -84,6 +112,7 @@ terraform output
 > ✅ Step 1 完了条件:
 > - `terraform output state_bucket_name` が `kong-ecs-testbed-tfstate-<account-id>` を返す
 > - AWS コンソールで S3 / DynamoDB / OIDC Provider / IAM Role が見える
+> - admin クレデンシャルから通常 (`kong-testbed`) プロファイルに戻し済み
 
 ---
 
@@ -95,8 +124,8 @@ GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
 | Name | 値 |
 | --- | --- |
-| `TF_STATE_BUCKET` | Step 1-3 の `state_bucket_name` |
-| `TF_LOCK_TABLE` | Step 1-3 の `state_lock_table_name` |
+| `TF_STATE_BUCKET` | Step 1-5 の `state_bucket_name` |
+| `TF_LOCK_TABLE` | Step 1-5 の `state_lock_table_name` |
 | `KONNECT_SERVER_URL` | `https://us.api.konghq.com` |
 | `KONNECT_CP_NAME` | `kong-ecs-testbed-cp` |
 
@@ -104,7 +133,7 @@ GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
 | Name | 値 |
 | --- | --- |
-| `AWS_ROLE_ARN` | Step 1-3 の `github_actions_role_arn` |
+| `AWS_ROLE_ARN` | Step 1-5 の `github_actions_role_arn` |
 | `KONNECT_PAT` | Konnect で発行済みの PAT (`kpat_...`)。0-setup.md 2-1 と同じ値 |
 | `DECK_API_KEY` | テスト用 API キー。0-setup.md 6-1 で `openssl rand -hex 24` 生成した値 |
 | `ALLOWED_CIDRS` | HCL list 形式の文字列。例: `["203.0.113.10/32"]`（中括弧・引用符込み） |
