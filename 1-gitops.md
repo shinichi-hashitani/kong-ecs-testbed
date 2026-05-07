@@ -246,6 +246,8 @@ terraform apply
 
 旧版（state lock を DynamoDB で実装）でセットアップ済みの場合は以下を一回だけ実施:
 
+> ⚠️ 順序重要: bootstrap apply（DynamoDB destroy）を **先に** 実施し、IAM policy 更新（DynamoDB 権限削除）は **後** に行う。先に policy を更新すると `dynamodb:DeleteTable` 権限が消え、bootstrap apply で table を destroy できなくなる。
+
 ```bash
 # プロジェクトルートで実行
 set -a; source .env; set +a
@@ -269,13 +271,13 @@ terraform init -reconfigure \
   -backend-config="use_lockfile=true"
 terraform plan   # No changes
 
-# (3) IAM policy を最新版で更新（DynamoDBStateLockTable statement の削除）
-# AWS コンソール → IAM → Policies → kong-ecs-testbed-terraform → Edit →
-# JSON タブに本リポジトリの最新 terraform-execution-policy.json を貼って Save
-
-# (4) bootstrap を再 apply して DynamoDB テーブルを削除
+# (3) bootstrap を再 apply して DynamoDB テーブルを削除（旧 policy の権限で実行）
 cd ../bootstrap
 terraform apply    # aws_dynamodb_table.tflocks の destroy が含まれる
+
+# (4) IAM policy を最新版で更新（DynamoDBStateLockTable statement の削除）
+# AWS コンソール → IAM → Policies → kong-ecs-testbed-terraform → Edit →
+# JSON タブに本リポジトリの最新 terraform-execution-policy.json を貼って Save
 
 # (5) GitHub Variables から TF_LOCK_TABLE を削除（未使用に）
 unset GITHUB_TOKEN
