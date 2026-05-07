@@ -1,0 +1,54 @@
+_format_version: "3.0"
+
+# Konnect モード: control_plane_name は CLI でも指定可。両方ある場合 CLI が優先。
+_konnect:
+  control_plane_name: kong-ecs-testbed-cp
+
+###############################################################################
+# Services / Routes
+###############################################################################
+services:
+  - name: httpbin
+    # Cloud Map で解決される httpbin タスクの A レコード
+    host: httpbin.kong-ecs-testbed.local
+    port: 80
+    protocol: http
+    retries: 5
+    connect_timeout: 5000
+    read_timeout: 30000
+    write_timeout: 30000
+
+    routes:
+      - name: httpbin-route
+        paths:
+          - /httpbin
+        strip_path: true
+        preserve_host: false
+        protocols:
+          - http
+          - https
+
+    plugins:
+      # 1 IP あたり毎分 60 リクエスト
+      - name: rate-limiting
+        config:
+          minute: 60
+          # Hybrid + DP 単一なので local policy で十分（cluster/redis は外部 DB 不要）
+          policy: local
+          fault_tolerant: true
+
+      # API key 認証 (header または query "apikey" で受け取る)
+      - name: key-auth
+        config:
+          key_names:
+            - apikey
+          hide_credentials: true
+
+###############################################################################
+# Consumer + Credential
+# api_key は --var 経由で注入する。ファイルにキーを直接書かない。
+###############################################################################
+consumers:
+  - username: test-user
+    keyauth_credentials:
+      - key: ${DECK_API_KEY}
