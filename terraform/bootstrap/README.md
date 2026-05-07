@@ -14,7 +14,7 @@ GitOps（[1-gitops.md](../../1-gitops.md)）の前提となるリソース一式
 ## 前提
 
 - 0-setup.md (Step 1) を完了済み（Customer Managed Policy `kong-ecs-testbed-terraform` が `terraform` ユーザに attach 済み）
-- **`kong-ecs-testbed-terraform` ポリシーが最新版**（OIDC Provider / S3 / DynamoDB の権限を含む）。後述の手順で IAM コンソールから更新する
+- **`kong-ecs-testbed-terraform` ポリシーが最新版**（OIDC Provider / S3 の権限を含む。state lock は S3 ネイティブ機能 `use_lockfile` を使うので DynamoDB は不要）。後述の手順で IAM コンソールから更新する
 
 ## 必要な権限の追加
 
