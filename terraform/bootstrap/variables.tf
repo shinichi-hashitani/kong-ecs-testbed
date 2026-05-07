@@ -5,7 +5,7 @@ variable "region" {
 }
 
 variable "project" {
-  description = "Project name (used for naming S3 bucket / DynamoDB / IAM role)."
+  description = "Project name (used for naming S3 bucket / IAM role)."
   type        = string
   default     = "kong-ecs-testbed"
 }

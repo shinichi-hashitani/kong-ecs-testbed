@@ -1,7 +1,7 @@
 terraform {
   required_version = ">= 1.10.0"
 
-  # Partial backend configuration: bucket / key / region / dynamodb_table are
+  # Partial backend configuration: bucket / key / region / use_lockfile are
   # supplied via `terraform init -backend-config="..."` (see 1-gitops.md).
   backend "s3" {}
 
