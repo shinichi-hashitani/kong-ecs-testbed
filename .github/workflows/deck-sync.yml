@@ -31,7 +31,7 @@ jobs:
       - id: check
         run: |
           if [ -z "${{ secrets.KONNECT_PAT }}" ] || [ -z "${{ secrets.DECK_API_KEY }}" ] || [ -z "${{ vars.KONNECT_SERVER_URL }}" ] || [ -z "${{ vars.KONNECT_CP_NAME }}" ]; then
-            echo "::warning::GitOps secrets/vars not yet configured. Skipping. Complete 1-gitops.md Step 2 first."
+            echo "::warning::GitOps secrets/vars not yet configured. Skipping. Complete 1-gitops.md Step 3 first."
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"

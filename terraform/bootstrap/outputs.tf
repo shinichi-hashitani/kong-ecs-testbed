@@ -1,11 +1,6 @@
 output "state_bucket_name" {
-  description = "S3 bucket holding Terraform remote state. Set as GitHub repo variable TF_STATE_BUCKET."
+  description = "S3 bucket holding Terraform remote state (also stores S3-native lock files). Set as GitHub repo variable TF_STATE_BUCKET."
   value       = aws_s3_bucket.tfstate.id
-}
-
-output "state_lock_table_name" {
-  description = "DynamoDB table for Terraform state locks. Set as GitHub repo variable TF_LOCK_TABLE."
-  value       = aws_dynamodb_table.tflocks.id
 }
 
 output "github_actions_role_arn" {
