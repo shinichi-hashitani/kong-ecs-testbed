@@ -15,44 +15,32 @@ GitOps（[1-gitops.md](../../1-gitops.md)）の前提となるリソース一式
 ## 前提
 
 - 0-setup.md (Step 1) を完了済み（Customer Managed Policy `kong-ecs-testbed-terraform` が `terraform` ユーザに attach 済み）
-- **AWS 管理者権限のクレデンシャル** が利用可能（後述）
+- **`kong-ecs-testbed-terraform` ポリシーが最新版**（OIDC Provider / S3 / DynamoDB の権限を含む）。後述の手順で IAM コンソールから更新する
 
-## 必要な権限
+## 必要な権限の追加
 
-bootstrap は以下の **管理者権限相当のリソース** を作る:
+bootstrap は以下のリソースを作るため、`terraform-execution-policy.json` に **3 つの statement を追加済み**（[../iam/terraform-execution-policy.json](../iam/terraform-execution-policy.json) 参照）:
 
-| リソース | 必要権限（terraform-execution-policy には未含有） |
-| --- | --- |
-| OIDC Identity Provider | `iam:CreateOpenIDConnectProvider` 等 |
-| S3 bucket (state)      | `s3:CreateBucket`, `s3:Put*`, `s3:Get*`, `s3:DeleteBucket` |
-| DynamoDB table (lock)  | `dynamodb:CreateTable`, `dynamodb:Describe*`, `dynamodb:DeleteTable`, `dynamodb:TagResource` |
+| Sid | 用途 | スコープ |
+| --- | --- | --- |
+| `IamOidcProviderForGithub` | GitHub Actions OIDC Provider 操作 | account-wide |
+| `S3StateBucket` | tfstate バケット (`kong-ecs-testbed-tfstate-*`) のフル管理 | bucket name 限定 |
+| `DynamoDBStateLockTable` | lock テーブル (`kong-ecs-testbed-tflocks`) のフル管理 | table name 限定 |
 
-`terraform` ユーザの `kong-ecs-testbed-terraform` ポリシーにはこれらが含まれていないため、そのままでは AccessDenied になる。bootstrap は一回限りのセットアップなので、**0-setup.md 1-2 で `aws iam create-policy` を実行した時のクレデンシャル（AdministratorAccess 等）を使う**こと。
+`terraform` ユーザは自身のポリシーを更新できない（権限昇格防止）ため、IAM コンソールから手動更新する:
 
-利用例:
-
-```bash
-# 例: 別プロファイルを使う場合
-aws configure --profile kong-testbed-admin
-export AWS_PROFILE=kong-testbed-admin
-
-# 例: 環境変数で一時的に渡す場合
-export AWS_ACCESS_KEY_ID="AKIA..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_REGION=ap-northeast-1
-```
-
-> 💡 完了後は `unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY` または `unset AWS_PROFILE` で admin 権限から戻し、通常作業は `AWS_PROFILE=kong-testbed` に切り替え直す。
+1. AWS コンソール → IAM → Policies → `kong-ecs-testbed-terraform` を開く
+2. **Edit** → JSON タブ → 本リポジトリの最新 [../iam/terraform-execution-policy.json](../iam/terraform-execution-policy.json) で全文置換
+3. **Next** → **Save changes**（新しいバージョンが作られ、それが既定になる）
 
 ## 実行
 
 ```bash
 cd terraform/bootstrap
 cp terraform.tfvars.example terraform.tfvars
-# terraform.tfvars を編集して github_owner を自身のアカウント名に
+# terraform.tfvars を編集して github_owner を自身の GitHub アカウント名に
 
-# admin クレデンシャルが有効になっていることを確認
-aws sts get-caller-identity   # Arn が user/<admin> 等になっているはず（user/terraform ではない）
+set -a; source ../../.env; set +a   # AWS_PROFILE=kong-testbed を読み込む
 
 terraform init
 terraform plan

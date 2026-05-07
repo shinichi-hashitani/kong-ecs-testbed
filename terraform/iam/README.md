@@ -10,7 +10,9 @@
 
 ## ポリシーの利用方法
 
-本ポリシーは 5KB 程度あり、IAM ユーザー inline policy の 2048 バイト上限を超えるため、**Customer Managed Policy** として作成してから IAM ユーザーに attach してください（6144 バイト枠）。
+本ポリシーは ~4.9KB あり、IAM ユーザー inline policy の 2048 バイト上限を超えるため、**Customer Managed Policy** として作成してから IAM ユーザーに attach してください（6144 バイト枠、現状 80% 使用）。
+
+### 初回作成（0-setup.md Step 1-2）
 
 ```bash
 # (1) 管理ポリシーを作成
@@ -31,6 +33,14 @@ aws iam list-attached-user-policies \
   --user-name <terraform を実行する IAM ユーザー名> \
   --profile kong-testbed
 ```
+
+### 既存ポリシーの更新（GitOps 移行時など）
+
+**`terraform` ユーザは自分のポリシーを更新できない**（権限昇格防止のため `iam:CreatePolicyVersion` を含めていない）。AWS コンソールから IAM Policy エディタで JSON を貼り直して新 version を default にする。
+
+1. AWS コンソール → IAM → Policies → `kong-ecs-testbed-terraform`
+2. **Edit** → **JSON** タブで本リポジトリの最新 [terraform-execution-policy.json](terraform-execution-policy.json) で全文置換
+3. **Next** → **Save changes**（最大 5 version まで保持。古い version は IAM コンソールで Delete 可）
 
 > 💡 個人アカウントなら AdministratorAccess でも実害は小さいが、本ポリシーで十分動くので最小権限を推奨。
 > ⚠️ `aws iam put-user-policy`（inline 用）はサイズ上限 2048 バイトに引っかかるので使わないこと。

@@ -44,11 +44,29 @@
 
 ## 手順
 
-### Step 1. Bootstrap を apply（ローカル一回）
+### Step 1. terraform-execution-policy を更新（IAM コンソール）
 
-> ⚠️ **このステップだけは AWS 管理者クレデンシャルで実行する**。bootstrap は OIDC Provider / S3 bucket / DynamoDB table を作るが、これらは 0-setup の `terraform` ユーザに付与している `kong-ecs-testbed-terraform` ポリシーに含まれない（管理者権限相当のため）。0-setup.md 1-2 で `aws iam create-policy` を実行した時のクレデンシャルをそのまま使う。詳細は [terraform/bootstrap/README.md](terraform/bootstrap/README.md)。
+bootstrap が必要とする OIDC Provider / S3 / DynamoDB の権限が、もともと 0-setup で適用したポリシーには入っていない。本リポジトリの最新 [terraform-execution-policy.json](terraform/iam/terraform-execution-policy.json) には以下 3 statement が追加済み:
 
-#### 1-1. 変数を設定
+| Sid | スコープ |
+| --- | --- |
+| `IamOidcProviderForGithub` | `iam:*OpenIDConnect*` (account-wide) |
+| `S3StateBucket` | `s3:*` on `kong-ecs-testbed-tfstate-*` |
+| `DynamoDBStateLockTable` | `dynamodb:*` on `kong-ecs-testbed-tflocks` |
+
+`terraform` ユーザは自身のポリシーを更新できないため、IAM コンソールで手動更新する:
+
+1. AWS コンソール → IAM → **Policies** → `kong-ecs-testbed-terraform` を開く
+2. **Edit** → **JSON** タブ → 本リポジトリの [terraform-execution-policy.json](terraform/iam/terraform-execution-policy.json) で全文置換
+3. **Next** → **Save changes**
+
+> ✅ Step 1 完了条件:
+> - ポリシーの新しい version が default として有効
+> - `aws iam get-policy --policy-arn arn:aws:iam::<account-id>:policy/kong-ecs-testbed-terraform` で `DefaultVersionId` が増えている
+
+### Step 2. Bootstrap を apply（ローカル一回）
+
+#### 2-1. 変数を設定
 
 ```bash
 cd terraform/bootstrap
@@ -56,51 +74,26 @@ cp terraform.tfvars.example terraform.tfvars
 # terraform.tfvars を編集して github_owner を自身の GitHub アカウント名に
 ```
 
-#### 1-2. admin クレデンシャルに切り替え
+#### 2-2. 実行
 
 ```bash
-# 別プロファイルとして登録している場合
-export AWS_PROFILE=kong-testbed-admin   # or 適切な admin profile 名
+set -a; source ../../.env; set +a   # AWS_PROFILE=kong-testbed を読み込む
+aws sts get-caller-identity         # Arn が user/terraform であることを確認
 
-# 環境変数で一時的に渡す場合
-# unset AWS_PROFILE
-# export AWS_ACCESS_KEY_ID="AKIA..."
-# export AWS_SECRET_ACCESS_KEY="..."
-# export AWS_REGION=ap-northeast-1
-
-aws sts get-caller-identity   # Arn が user/terraform でないことを確認
-```
-
-#### 1-3. 実行
-
-```bash
 terraform init
 terraform plan
 terraform apply
 ```
 
-> 💡 このモジュールは S3 / DynamoDB / OIDC / IAM Role を作る。state は意図的に **local** に置く（chicken-and-egg のため）。`terraform/bootstrap/terraform.tfstate` は gitignore 対象。
+> 💡 このモジュールは S3 / DynamoDB / OIDC / IAM Role を作る。state は意図的に **local** に置く（自身が作る S3 を backend にできない chicken-and-egg のため）。`terraform/bootstrap/terraform.tfstate` は gitignore 対象。
 
-#### 1-4. 通常クレデンシャルに戻す
-
-```bash
-# 別プロファイルだった場合
-export AWS_PROFILE=kong-testbed
-
-# 環境変数だった場合
-# unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-# export AWS_PROFILE=kong-testbed
-
-aws sts get-caller-identity   # Arn が user/terraform に戻る
-```
-
-#### 1-5. Output の控え
+#### 2-3. Output の控え
 
 ```bash
 terraform output
 ```
 
-以下 4 つを Step 2 で GitHub に登録する:
+以下 4 つを次の Step で GitHub に登録する:
 
 | Terraform output | 登録先 (GitHub) |
 | --- | --- |
@@ -109,14 +102,13 @@ terraform output
 | `github_actions_role_arn` | repo Secret `AWS_ROLE_ARN` |
 | `github_oidc_provider_arn` | （登録不要、確認用） |
 
-> ✅ Step 1 完了条件:
+> ✅ Step 2 完了条件:
 > - `terraform output state_bucket_name` が `kong-ecs-testbed-tfstate-<account-id>` を返す
 > - AWS コンソールで S3 / DynamoDB / OIDC Provider / IAM Role が見える
-> - admin クレデンシャルから通常 (`kong-testbed`) プロファイルに戻し済み
 
 ---
 
-### Step 2. GitHub repo の Secrets / Variables 設定
+### Step 3. GitHub repo の Secrets / Variables 設定
 
 GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
@@ -124,8 +116,8 @@ GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
 | Name | 値 |
 | --- | --- |
-| `TF_STATE_BUCKET` | Step 1-5 の `state_bucket_name` |
-| `TF_LOCK_TABLE` | Step 1-5 の `state_lock_table_name` |
+| `TF_STATE_BUCKET` | Step 2-3 の `state_bucket_name` |
+| `TF_LOCK_TABLE` | Step 2-3 の `state_lock_table_name` |
 | `KONNECT_SERVER_URL` | `https://us.api.konghq.com` |
 | `KONNECT_CP_NAME` | `kong-ecs-testbed-cp` |
 
@@ -133,7 +125,7 @@ GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
 | Name | 値 |
 | --- | --- |
-| `AWS_ROLE_ARN` | Step 1-5 の `github_actions_role_arn` |
+| `AWS_ROLE_ARN` | Step 2-3 の `github_actions_role_arn` |
 | `KONNECT_PAT` | Konnect で発行済みの PAT (`kpat_...`)。0-setup.md 2-1 と同じ値 |
 | `DECK_API_KEY` | テスト用 API キー。0-setup.md 6-1 で `openssl rand -hex 24` 生成した値 |
 | `ALLOWED_CIDRS` | HCL list 形式の文字列。例: `["203.0.113.10/32"]`（中括弧・引用符込み） |
@@ -145,12 +137,12 @@ GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 > gh secret   set ALLOWED_CIDRS    --body '["203.0.113.10/32"]'
 > ```
 
-> ✅ Step 2 完了条件:
+> ✅ Step 3 完了条件:
 > - **Settings → Secrets and variables → Actions** に上記 4 vars + 4 secrets が表示される
 
 ---
 
-### Step 3. 既存 local state を S3 に移行
+### Step 4. 既存 local state を S3 に移行
 
 `terraform/aws/versions.tf` / `terraform/konnect/versions.tf` には既に `backend "s3" {}` 空ブロックが入っている。次回 `terraform init` で backend 切替が検知されるので、`-migrate-state` フラグで既存の local state を S3 に転送する。
 
@@ -191,13 +183,13 @@ terraform plan -var-file=terraform.tfvars   # No changes
 > 💡 移行後、ローカルの `terraform.tfstate` ファイルは中身が空（backend 設定のみ）になる。間違って削除しても S3 にあるので問題ない。
 > ⚠️ 移行作業中は他のメンバー（または CI）が同時 apply しないよう注意。
 
-> ✅ Step 3 完了条件:
+> ✅ Step 4 完了条件:
 > - `terraform/konnect/` / `terraform/aws/` で `terraform plan` が `No changes` を返す
 > - S3 バケットに `konnect/terraform.tfstate` / `aws/terraform.tfstate` の 2 オブジェクトがある
 
 ---
 
-### Step 4. 動作確認（試し PR で plan を回す）
+### Step 5. 動作確認（試し PR で plan を回す）
 
 #### 4-1. 任意の no-op 変更を加えてブランチ push
 
@@ -227,13 +219,13 @@ git checkout main
 git branch -D test/gitops-pipeline
 ```
 
-> ✅ Step 4 完了条件:
+> ✅ Step 5 完了条件:
 > - `Terraform AWS / plan` workflow が `Success`
 > - PR コメントに plan が貼られている（`No changes` または意図した差分のみ）
 
 ---
 
-### Step 5. ローカル apply の継続使用について
+### Step 6. ローカル apply の継続使用について
 
 bootstrap 後もローカルでの `terraform apply` は引き続き可能（state は S3 で共有）:
 
@@ -255,7 +247,7 @@ terraform apply
 | 症状 | 原因 / 対処 |
 | --- | --- |
 | `Backend initialization required` | `terraform init -migrate-state -backend-config="..."` を再実行 |
-| Workflow が `preflight: skipped` で止まる | `vars.TF_STATE_BUCKET` / `secrets.AWS_ROLE_ARN` 等が空。Step 2 を見直す |
+| Workflow が `preflight: skipped` で止まる | `vars.TF_STATE_BUCKET` / `secrets.AWS_ROLE_ARN` 等が空。Step 3 を見直す |
 | `Error: AccessDenied` on `s3:GetObject` | IAM Role に state-backend inline policy が attach されていない。bootstrap apply からやり直し |
 | `Error: NoCredentialProviders` | `id-token: write` 権限が workflow の `permissions:` に無い、または OIDC trust の `sub` 条件が `repo:OWNER/REPO:*` と合っていない。bootstrap の `var.github_owner` を確認 |
 | deck workflow が 401 | `secrets.DECK_API_KEY` 未設定、または値が空。0-setup.md 6-1 で控えた値で再登録 |

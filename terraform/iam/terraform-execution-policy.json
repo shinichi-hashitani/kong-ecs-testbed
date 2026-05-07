@@ -191,6 +191,27 @@
         "route53:ListTagsForResource"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "IamOidcProviderForGithub",
+      "Effect": "Allow",
+      "Action": "iam:*OpenIDConnect*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3StateBucket",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::kong-ecs-testbed-tfstate-*",
+        "arn:aws:s3:::kong-ecs-testbed-tfstate-*/*"
+      ]
+    },
+    {
+      "Sid": "DynamoDBStateLockTable",
+      "Effect": "Allow",
+      "Action": "dynamodb:*",
+      "Resource": "arn:aws:dynamodb:*:*:table/kong-ecs-testbed-tflocks"
     }
   ]
 }
