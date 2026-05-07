@@ -64,7 +64,7 @@ variable "httpbin_desired_count" {
 variable "kong_dp_image" {
   description = "Container image for Kong Gateway DP."
   type        = string
-  default     = "kong/kong-gateway:3.8"
+  default     = "kong/kong-gateway:3.13"
 }
 
 variable "kong_dp_desired_count" {
