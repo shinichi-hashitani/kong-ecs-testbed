@@ -206,12 +206,6 @@
         "arn:aws:s3:::kong-ecs-testbed-tfstate-*",
         "arn:aws:s3:::kong-ecs-testbed-tfstate-*/*"
       ]
-    },
-    {
-      "Sid": "DynamoDBStateLockTable",
-      "Effect": "Allow",
-      "Action": "dynamodb:*",
-      "Resource": "arn:aws:dynamodb:*:*:table/kong-ecs-testbed-tflocks"
     }
   ]
 }

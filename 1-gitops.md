@@ -1,6 +1,6 @@
 # 1-gitops.md — 作業の GitOps 化
 
-[0-setup.md](0-setup.md) で構築したテストベッドの運用を **GitHub Actions** 経由に移行する。Access Key を排除し、Terraform の state は S3 + DynamoDB に集約、`terraform plan` は PR 上で確認、`terraform apply` / `deck gateway sync` は main マージで自動実行する構成にする。
+[0-setup.md](0-setup.md) で構築したテストベッドの運用を **GitHub Actions** 経由に移行する。Access Key を排除し、Terraform の state は S3 に集約（lock も S3 ネイティブ機能 `use_lockfile`、Terraform 1.10+）、`terraform plan` は PR 上で確認、`terraform apply` / `deck gateway sync` は main マージで自動実行する構成にする。
 
 > 💡 完了後は `terraform/` / `deck/` への変更は必ず PR 経由で行うこと。手元での `terraform apply` も引き続き可能だが、state が共有される点は意識する。
 
@@ -17,9 +17,8 @@
 ┌────────────────────────┐    ┌────────────────────────────────────────┐
 │ AWS                    │    │ Kong Konnect                           │
 │  IAM Role (assume)     │    │  Control Plane: kong-ecs-testbed-cp    │
-│  S3 (tfstate)          │    │                                        │
-│  DynamoDB (tflocks)    │    └────────────────────────────────────────┘
-│  ECS / ALB / etc.      │
+│  S3 (tfstate + lock)   │    │                                        │
+│  ECS / ALB / etc.      │    └────────────────────────────────────────┘
 └────────────────────────┘
 ```
 
@@ -27,7 +26,7 @@
 
 | パス | 用途 |
 | --- | --- |
-| [terraform/bootstrap/](terraform/bootstrap/) | S3 / DynamoDB / OIDC Provider / IAM Role を作る Terraform。**ローカル一回だけ** apply する |
+| [terraform/bootstrap/](terraform/bootstrap/) | S3 (tfstate + lock) / OIDC Provider / IAM Role を作る Terraform。**ローカル一回だけ** apply する |
 | [.github/workflows/terraform-aws.yml](.github/workflows/terraform-aws.yml) | `terraform/aws/**` 変更で plan (PR) / apply (main) |
 | [.github/workflows/terraform-konnect.yml](.github/workflows/terraform-konnect.yml) | `terraform/konnect/**` 変更で plan (PR) / apply (main) |
 | [.github/workflows/deck-sync.yml](.github/workflows/deck-sync.yml) | `deck/**` 変更で diff (PR) / sync (main) |
@@ -46,13 +45,14 @@
 
 ### Step 1. terraform-execution-policy を更新（IAM コンソール）
 
-bootstrap が必要とする OIDC Provider / S3 / DynamoDB の権限が、もともと 0-setup で適用したポリシーには入っていない。本リポジトリの最新 [terraform-execution-policy.json](terraform/iam/terraform-execution-policy.json) には以下 3 statement が追加済み:
+bootstrap が必要とする OIDC Provider / S3 の権限が、もともと 0-setup で適用したポリシーには入っていない。本リポジトリの最新 [terraform-execution-policy.json](terraform/iam/terraform-execution-policy.json) には以下 statement が追加済み:
 
 | Sid | スコープ |
 | --- | --- |
 | `IamOidcProviderForGithub` | `iam:*OpenIDConnect*` (account-wide) |
 | `S3StateBucket` | `s3:*` on `kong-ecs-testbed-tfstate-*` |
-| `DynamoDBStateLockTable` | `dynamodb:*` on `kong-ecs-testbed-tflocks` |
+
+> 💡 旧版に含まれていた `DynamoDBStateLockTable` statement は、`use_lockfile=true` (S3 ネイティブロック) への切替で不要になった。残っていても害はないが、削除する場合は同様に IAM コンソールから JSON を貼り直せば良い（[terraform-execution-policy.json](terraform/iam/terraform-execution-policy.json) は最新版で削除済み）。
 
 `terraform` ユーザは自身のポリシーを更新できないため、IAM コンソールで手動更新する:
 
@@ -93,18 +93,17 @@ terraform apply
 terraform output
 ```
 
-以下 4 つを次の Step で GitHub に登録する:
+以下 3 つを次の Step で GitHub に登録する:
 
 | Terraform output | 登録先 (GitHub) |
 | --- | --- |
 | `state_bucket_name` | repo Variable `TF_STATE_BUCKET` |
-| `state_lock_table_name` | repo Variable `TF_LOCK_TABLE` |
 | `github_actions_role_arn` | repo Secret `AWS_ROLE_ARN` |
 | `github_oidc_provider_arn` | （登録不要、確認用） |
 
 > ✅ Step 2 完了条件:
 > - `terraform output state_bucket_name` が `kong-ecs-testbed-tfstate-<account-id>` を返す
-> - AWS コンソールで S3 / DynamoDB / OIDC Provider / IAM Role が見える
+> - AWS コンソールで S3 / OIDC Provider / IAM Role が見える（state lock は S3 ネイティブ機能 `use_lockfile` で同じ S3 内に置くので DynamoDB は不要）
 
 ---
 
@@ -112,16 +111,15 @@ terraform output
 
 GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
-#### 2-1. Variables（公開設定。読みやすさのため）
+#### 3-1. Variables（公開設定。読みやすさのため）
 
 | Name | 値 |
 | --- | --- |
 | `TF_STATE_BUCKET` | Step 2-3 の `state_bucket_name` |
-| `TF_LOCK_TABLE` | Step 2-3 の `state_lock_table_name` |
 | `KONNECT_SERVER_URL` | `https://us.api.konghq.com` |
 | `KONNECT_CP_NAME` | `kong-ecs-testbed-cp` |
 
-#### 2-2. Secrets（機密。logs にマスキングされる）
+#### 3-2. Secrets（機密。logs にマスキングされる）
 
 | Name | 値 |
 | --- | --- |
@@ -146,7 +144,7 @@ GitHub UI: **Settings → Secrets and variables → Actions** で登録する。
 
 `terraform/aws/versions.tf` / `terraform/konnect/versions.tf` には既に `backend "s3" {}` 空ブロックが入っている。次回 `terraform init` で backend 切替が検知されるので、`-migrate-state` フラグで既存の local state を S3 に転送する。
 
-#### 3-1. terraform/konnect の state 移行
+#### 4-1. terraform/konnect の state 移行
 
 ```bash
 cd terraform/konnect
@@ -154,7 +152,7 @@ terraform init -migrate-state \
   -backend-config="bucket=$(cd ../bootstrap && terraform output -raw state_bucket_name)" \
   -backend-config="key=konnect/terraform.tfstate" \
   -backend-config="region=ap-northeast-1" \
-  -backend-config="dynamodb_table=$(cd ../bootstrap && terraform output -raw state_lock_table_name)"
+  -backend-config="use_lockfile=true"
 # プロンプトで `yes` を入力（既存 state を S3 に移すか）
 ```
 
@@ -164,7 +162,7 @@ terraform init -migrate-state \
 terraform plan   # No changes になることを確認
 ```
 
-#### 3-2. terraform/aws の state 移行
+#### 4-2. terraform/aws の state 移行
 
 ```bash
 cd ../aws
@@ -172,13 +170,15 @@ terraform init -migrate-state \
   -backend-config="bucket=$(cd ../bootstrap && terraform output -raw state_bucket_name)" \
   -backend-config="key=aws/terraform.tfstate" \
   -backend-config="region=ap-northeast-1" \
-  -backend-config="dynamodb_table=$(cd ../bootstrap && terraform output -raw state_lock_table_name)"
+  -backend-config="use_lockfile=true"
 # プロンプトで `yes`
 ```
 
 ```bash
 terraform plan -var-file=terraform.tfvars   # No changes
 ```
+
+> 💡 `use_lockfile=true` は Terraform 1.10+ の S3 ネイティブロック機能。同じ S3 バケットの `<key>.tflock` に lock 情報を保存し、DynamoDB を不要にする。
 
 > 💡 移行後、ローカルの `terraform.tfstate` ファイルは中身が空（backend 設定のみ）になる。間違って削除しても S3 にあるので問題ない。
 > ⚠️ 移行作業中は他のメンバー（または CI）が同時 apply しないよう注意。
@@ -191,7 +191,7 @@ terraform plan -var-file=terraform.tfvars   # No changes
 
 ### Step 5. 動作確認（試し PR で plan を回す）
 
-#### 4-1. 任意の no-op 変更を加えてブランチ push
+#### 5-1. 任意の no-op 変更を加えてブランチ push
 
 ```bash
 git checkout -b test/gitops-pipeline
@@ -201,17 +201,17 @@ git commit -m "test: trigger gitops plan"
 git push -u origin test/gitops-pipeline
 ```
 
-#### 4-2. PR を作成
+#### 5-2. PR を作成
 
 ```bash
 gh pr create --base main --title "test: gitops pipeline" --body "Verifying terraform-aws workflow plan job."
 ```
 
-#### 4-3. Actions を確認
+#### 5-3. Actions を確認
 
 GitHub UI → **Actions** タブ → `Terraform AWS` workflow が起動し、`plan` job が `Success` で終わっていれば OK。PR にコメントで `### Terraform AWS plan` 付きの diff が貼られる（`No changes` 想定）。
 
-#### 4-4. テスト PR を破棄
+#### 5-4. テスト PR を破棄
 
 ```bash
 gh pr close test/gitops-pipeline --delete-branch
@@ -236,9 +236,51 @@ terraform apply
 ```
 
 ただし以下のルールを守る:
-- **同時 apply は不可**（DynamoDB lock により競合する）
+- **同時 apply は不可**（S3 上の lock file により競合する）
 - **CI が apply 中はローカルから打たない**（ロック取得待ちにはなるが、混乱の元）
 - **本番運用相当のコミットは PR 経由のみ** にし、ローカル apply はトラブル切り分け時の救済手段として残す
+
+---
+
+## 既存 (DynamoDB lock) 環境からの移行
+
+旧版（state lock を DynamoDB で実装）でセットアップ済みの場合は以下を一回だけ実施:
+
+```bash
+# プロジェクトルートで実行
+set -a; source .env; set +a
+BUCKET=$(cd terraform/bootstrap && terraform output -raw state_bucket_name)
+
+# (1) terraform/konnect を S3-native lock に切替
+cd terraform/konnect
+terraform init -reconfigure \
+  -backend-config="bucket=$BUCKET" \
+  -backend-config="key=konnect/terraform.tfstate" \
+  -backend-config="region=ap-northeast-1" \
+  -backend-config="use_lockfile=true"
+terraform plan   # No changes
+
+# (2) terraform/aws も同様
+cd ../aws
+terraform init -reconfigure \
+  -backend-config="bucket=$BUCKET" \
+  -backend-config="key=aws/terraform.tfstate" \
+  -backend-config="region=ap-northeast-1" \
+  -backend-config="use_lockfile=true"
+terraform plan   # No changes
+
+# (3) IAM policy を最新版で更新（DynamoDBStateLockTable statement の削除）
+# AWS コンソール → IAM → Policies → kong-ecs-testbed-terraform → Edit →
+# JSON タブに本リポジトリの最新 terraform-execution-policy.json を貼って Save
+
+# (4) bootstrap を再 apply して DynamoDB テーブルを削除
+cd ../bootstrap
+terraform apply    # aws_dynamodb_table.tflocks の destroy が含まれる
+
+# (5) GitHub Variables から TF_LOCK_TABLE を削除（未使用に）
+unset GITHUB_TOKEN
+gh variable delete TF_LOCK_TABLE
+```
 
 ---
 

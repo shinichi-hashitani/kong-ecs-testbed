@@ -3,8 +3,7 @@
 #
 # Provisions the prerequisites for running terraform/aws & terraform/konnect
 # from GitHub Actions:
-#   - S3 bucket  : remote state backend
-#   - DynamoDB   : state lock table
+#   - S3 bucket  : remote state backend (with native lockfile via use_lockfile)
 #   - OIDC       : GitHub Actions OIDC identity provider
 #   - IAM Role   : assumed by GitHub Actions, attached with the existing
 #                  terraform-execution Customer Managed Policy + state backend
@@ -17,12 +16,11 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  account_id            = data.aws_caller_identity.current.account_id
-  state_bucket_name     = "${var.project}-tfstate-${local.account_id}"
-  state_lock_table_name = "${var.project}-tflocks"
-  oidc_role_name        = "${var.project}-github-actions"
-  github_sub_pattern    = "repo:${var.github_owner}/${var.github_repo}:*"
-  terraform_policy_arn  = "arn:aws:iam::${local.account_id}:policy/${var.terraform_policy_name}"
+  account_id           = data.aws_caller_identity.current.account_id
+  state_bucket_name    = "${var.project}-tfstate-${local.account_id}"
+  oidc_role_name       = "${var.project}-github-actions"
+  github_sub_pattern   = "repo:${var.github_owner}/${var.github_repo}:*"
+  terraform_policy_arn = "arn:aws:iam::${local.account_id}:policy/${var.terraform_policy_name}"
 }
 
 ###############################################################################
@@ -55,20 +53,6 @@ resource "aws_s3_bucket_public_access_block" "tfstate" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
-}
-
-###############################################################################
-# DynamoDB: Terraform state lock table
-###############################################################################
-resource "aws_dynamodb_table" "tflocks" {
-  name         = local.state_lock_table_name
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
 }
 
 ###############################################################################
@@ -121,7 +105,8 @@ resource "aws_iam_role_policy_attachment" "terraform_execution" {
   policy_arn = local.terraform_policy_arn
 }
 
-# Inline policy: S3 + DynamoDB access for the state backend
+# Inline policy: S3 access for the state backend (S3-native locking via use_lockfile
+# uses the same bucket; no DynamoDB needed).
 data "aws_iam_policy_document" "state_backend" {
   statement {
     sid     = "S3ListStateBucket"
@@ -133,7 +118,7 @@ data "aws_iam_policy_document" "state_backend" {
   }
 
   statement {
-    sid    = "S3StateObjects"
+    sid    = "S3StateObjectsAndLockfile"
     effect = "Allow"
     actions = [
       "s3:GetObject",
@@ -142,20 +127,6 @@ data "aws_iam_policy_document" "state_backend" {
     ]
     resources = [
       "${aws_s3_bucket.tfstate.arn}/*",
-    ]
-  }
-
-  statement {
-    sid    = "DynamoDBStateLocks"
-    effect = "Allow"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem",
-      "dynamodb:DescribeTable",
-    ]
-    resources = [
-      aws_dynamodb_table.tflocks.arn,
     ]
   }
 }
