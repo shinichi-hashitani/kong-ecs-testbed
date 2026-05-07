@@ -1,0 +1,102 @@
+name: deck Sync
+
+on:
+  pull_request:
+    paths:
+      - 'deck/**'
+      - '.github/workflows/deck-sync.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deck/**'
+      - '.github/workflows/deck-sync.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  DECK_VERSION: 1.53.1
+
+concurrency:
+  group: deck-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        run: |
+          if [ -z "${{ secrets.KONNECT_PAT }}" ] || [ -z "${{ secrets.DECK_API_KEY }}" ] || [ -z "${{ vars.KONNECT_SERVER_URL }}" ] || [ -z "${{ vars.KONNECT_CP_NAME }}" ]; then
+            echo "::warning::GitOps secrets/vars not yet configured. Skipping. Complete 1-gitops.md Step 2 first."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  diff:
+    needs: preflight
+    if: github.event_name == 'pull_request' && needs.preflight.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DECK_API_KEY: ${{ secrets.DECK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deck
+        run: |
+          curl -sL "https://github.com/Kong/deck/releases/download/v${DECK_VERSION}/deck_${DECK_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin deck
+          deck version
+
+      - name: deck gateway diff
+        run: |
+          set -o pipefail
+          envsubst '${DECK_API_KEY}' < deck/kong.yaml > /tmp/kong.rendered.yaml
+          deck gateway diff \
+            --konnect-token "${{ secrets.KONNECT_PAT }}" \
+            --konnect-addr  "${{ vars.KONNECT_SERVER_URL }}" \
+            --konnect-control-plane-name "${{ vars.KONNECT_CP_NAME }}" \
+            /tmp/kong.rendered.yaml | tee /tmp/deck-diff.txt
+
+      - name: Post diff to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const diff = fs.readFileSync('/tmp/deck-diff.txt', 'utf8');
+            const truncated = diff.length > 60000 ? diff.slice(0, 60000) + '\n... (truncated)' : diff;
+            const body = `### deck gateway diff\n\n<details><summary>Show diff</summary>\n\n\`\`\`\n${truncated}\n\`\`\`\n\n</details>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  sync:
+    needs: preflight
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DECK_API_KEY: ${{ secrets.DECK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deck
+        run: |
+          curl -sL "https://github.com/Kong/deck/releases/download/v${DECK_VERSION}/deck_${DECK_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin deck
+          deck version
+
+      - name: deck gateway sync
+        run: |
+          envsubst '${DECK_API_KEY}' < deck/kong.yaml > /tmp/kong.rendered.yaml
+          deck gateway sync \
+            --konnect-token "${{ secrets.KONNECT_PAT }}" \
+            --konnect-addr  "${{ vars.KONNECT_SERVER_URL }}" \
+            --konnect-control-plane-name "${{ vars.KONNECT_CP_NAME }}" \
+            /tmp/kong.rendered.yaml

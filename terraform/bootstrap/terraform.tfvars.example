@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+
+github_owner = "shinichi-hashitani"
+# github_repo  = "kong-ecs-testbed"  # default

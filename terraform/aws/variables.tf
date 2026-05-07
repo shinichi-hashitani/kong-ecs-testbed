@@ -41,11 +41,6 @@ variable "private_dns_namespace" {
   default     = "kong-ecs-testbed.local"
 }
 
-variable "konnect_state_path" {
-  description = "Relative path to the terraform/konnect tfstate file (read via terraform_remote_state)."
-  type        = string
-  default     = "../konnect/terraform.tfstate"
-}
 
 # ---- httpbin (Step 4) ----
 variable "httpbin_image" {
